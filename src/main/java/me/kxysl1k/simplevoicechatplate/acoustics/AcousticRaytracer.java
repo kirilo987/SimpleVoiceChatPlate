@@ -62,7 +62,9 @@ public class AcousticRaytracer {
         float muffleStrength = settings.getWallMuffleStrength();
 
         RayResult direct = settings.isThroughWallsEnabled()
-                ? traceSegment(world, srcX, srcY, srcZ, lx, ly, lz, ignoreBlockX, ignoreBlockY, ignoreBlockZ)
+                ? (settings.isVolumetricRaysEnabled() && dist > 0.85
+                ? traceVolumetric(world, srcX, srcY, srcZ, lx, ly, lz, dist, ignoreBlockX, ignoreBlockY, ignoreBlockZ)
+                : traceSegment(world, srcX, srcY, srcZ, lx, ly, lz, ignoreBlockX, ignoreBlockY, ignoreBlockZ))
                 : new RayResult(0f, 0f, 0);
 
         float effectiveLossDb = direct.lossDb * muffleStrength;
@@ -71,37 +73,29 @@ public class AcousticRaytracer {
         double apparentY = srcY;
         double apparentZ = srcZ;
 
-        /*
-         * Волновая дифракция и смещение кажущегося 3D-портала:
-         * Если прямая видимость перекрыта стеной, но рядом есть открытый дверной проем, окно или угол коридора,
-         * складываются энергетические вклады прямого прохождения сквозь стену и огибающей волны:
-         *   E_sum = 10^(-L_direct / 10) + 10^(-L_diffracted / 10)
-         * При доминировании огибающего пути виртуальная 3D-позиция источника поворачивается на вектор открытого
-         * проема с сохранением истинного радиуса dist, чтобы клиентский OpenAL HRTF позиционировал звук из двери,
-         * не искажая дистанционное затухание Simple Voice Chat.
-         */
-        if (settings.isThroughWallsEnabled() && settings.isDiffractionEnabled() && direct.lossDb > 1.2f && dist > 1.8 && dist <= maxRange) {
-            DiffractionCandidate best = findBestDiffractionPath(
-                    world, srcX, srcY, srcZ, lx, ly, lz, dist, ignoreBlockX, ignoreBlockY, ignoreBlockZ, muffleStrength);
+        if (settings.isThroughWallsEnabled() && settings.isDiffractionEnabled() && direct.lossDb > 0.8f && dist > 0.75 && dist <= maxRange) {
+            DiffractionCandidate diff = computeBlendedDiffraction(
+                    world, srcX, srcY, srcZ, lx, ly, lz, dist, ignoreBlockX, ignoreBlockY, ignoreBlockZ, muffleStrength, effectiveLossDb);
 
-            if (best != null && best.totalLossDb < effectiveLossDb) {
+            if (diff != null && diff.totalLossDb < effectiveLossDb) {
+                double distFade = Math.clamp((dist - 0.75) / 1.05, 0.0, 1.0);
                 double directEnergy = Math.pow(10.0, -effectiveLossDb / 10.0);
-                double diffEnergy = Math.pow(10.0, -best.totalLossDb / 10.0);
+                double diffEnergy = Math.pow(10.0, -diff.totalLossDb / 10.0) * distFade;
                 double combinedEnergy = directEnergy + diffEnergy;
                 effectiveLossDb = (float) (-10.0 * Math.log10(Math.max(1e-6, combinedEnergy)));
 
                 float diffWeight = (float) (diffEnergy / Math.max(1e-6, combinedEnergy));
-                effectiveMuffle = effectiveMuffle * (1.0f - diffWeight) + best.muffleScore * diffWeight;
+                effectiveMuffle = effectiveMuffle * (1.0f - diffWeight) + diff.muffleScore * diffWeight;
 
-                double pdx = best.portalX - lx;
-                double pdy = best.portalY - ly;
-                double pdz = best.portalZ - lz;
+                double pdx = diff.portalX - lx;
+                double pdy = diff.portalY - ly;
+                double pdz = diff.portalZ - lz;
                 double pLen = Math.sqrt(pdx * pdx + pdy * pdy + pdz * pdz);
                 if (pLen > 0.25) {
                     double dirShiftX = lx + (pdx / pLen) * dist;
                     double dirShiftY = ly + (pdy / pLen) * dist;
                     double dirShiftZ = lz + (pdz / pLen) * dist;
-                    double blend = 0.65 * diffWeight;
+                    double blend = 0.60 * diffWeight;
                     apparentX = srcX * (1.0 - blend) + dirShiftX * blend;
                     apparentY = srcY * (1.0 - blend) + dirShiftY * blend;
                     apparentZ = srcZ * (1.0 - blend) + dirShiftZ * blend;
@@ -163,13 +157,77 @@ public class AcousticRaytracer {
         );
     }
 
-    private DiffractionCandidate findBestDiffractionPath(
+    private RayResult traceVolumetric(
+            World world,
+            double sx, double sy, double sz,
+            double lx, double ly, double lz,
+            double dist,
+            int ignX, int ignY, int ignZ
+    ) {
+        double ux = (lx - sx) / dist;
+        double uy = (ly - sy) / dist;
+        double uz = (lz - sz) / dist;
+
+        double hLen = Math.hypot(ux, uz);
+        double rx = hLen > 0.01 ? -uz / hLen : 1.0;
+        double rz = hLen > 0.01 ? ux / hLen : 0.0;
+
+        double vx = uy * rz;
+        double vy = uz * rx - ux * rz;
+        double vz = -uy * rx;
+
+        double listenerAperture = Math.min(0.38, dist * 0.28);
+        double sourceAperture = Math.min(0.20, dist * 0.14);
+
+        double[][] offsets = {
+                {0.0, 0.0, 0.36},
+                {1.0, 0.0, 0.16},
+                {-1.0, 0.0, 0.16},
+                {0.0, 1.0, 0.16},
+                {0.0, -1.0, 0.16}
+        };
+
+        double energySum = 0.0;
+        double weightedMuffleSum = 0.0;
+        int minSolidBlocks = Integer.MAX_VALUE;
+
+        for (double[] off : offsets) {
+            double rMul = off[0];
+            double vMul = off[1];
+            double weight = off[2];
+
+            double x0 = sx + (rx * rMul + vx * vMul) * sourceAperture;
+            double y0 = sy + (vy * vMul) * sourceAperture;
+            double z0 = sz + (rz * rMul + vz * vMul) * sourceAperture;
+
+            double x1 = lx + (rx * rMul + vx * vMul) * listenerAperture;
+            double y1 = ly + (vy * vMul) * listenerAperture;
+            double z1 = lz + (rz * rMul + vz * vMul) * listenerAperture;
+
+            RayResult sample = traceSegment(world, x0, y0, z0, x1, y1, z1, ignX, ignY, ignZ);
+            double rayEnergy = Math.pow(10.0, -sample.lossDb / 10.0);
+            double wEnergy = weight * rayEnergy;
+
+            energySum += wEnergy;
+            weightedMuffleSum += wEnergy * sample.muffleScore;
+            if (sample.solidBlocks < minSolidBlocks) {
+                minSolidBlocks = sample.solidBlocks;
+            }
+        }
+
+        float combinedLossDb = (float) Math.max(0.0, -10.0 * Math.log10(Math.max(1e-7, energySum)));
+        float combinedMuffle = energySum > 1e-7 ? (float) (weightedMuffleSum / energySum) : 0.0f;
+        return new RayResult(combinedLossDb, combinedMuffle, minSolidBlocks == Integer.MAX_VALUE ? 0 : minSolidBlocks);
+    }
+
+    private DiffractionCandidate computeBlendedDiffraction(
             World world,
             double sx, double sy, double sz,
             double lx, double ly, double lz,
             double directDist,
             int ignX, int ignY, int ignZ,
-            float muffleStrength
+            float muffleStrength,
+            float directEffectiveLossDb
     ) {
         double midX = (sx + lx) * 0.5;
         double midY = (sy + ly) * 0.5;
@@ -182,17 +240,23 @@ public class AcousticRaytracer {
         double pz = hLen > 0.01 ? vx / hLen : 0.0;
 
         double[][] candidates = {
-                {midX + px * 2.5, midY, midZ + pz * 2.5},
-                {midX - px * 2.5, midY, midZ - pz * 2.5},
-                {midX + px * 4.8, midY, midZ + pz * 4.8},
-                {midX - px * 4.8, midY, midZ - pz * 4.8},
-                {midX, Math.max(sy, ly) + 2.4, midZ},
-                {midX, Math.max(sy, ly) + 4.5, midZ},
+                {midX + px * 1.6, midY, midZ + pz * 1.6},
+                {midX - px * 1.6, midY, midZ - pz * 1.6},
+                {midX + px * 3.1, midY, midZ + pz * 3.1},
+                {midX - px * 3.1, midY, midZ - pz * 3.1},
+                {midX + px * 5.0, midY, midZ + pz * 5.0},
+                {midX - px * 5.0, midY, midZ - pz * 5.0},
+                {midX, Math.max(sy, ly) + 2.2, midZ},
+                {midX, Math.max(sy, ly) + 4.4, midZ},
                 {sx, ly, lz},
                 {lx, sy, sz}
         };
 
-        DiffractionCandidate best = null;
+        double sumEnergy = 0.0;
+        double maxSingleEnergy = 0.0;
+        double sumPortalX = 0.0, sumPortalY = 0.0, sumPortalZ = 0.0;
+        double sumMuffle = 0.0;
+        int validCount = 0;
 
         for (double[] c : candidates) {
             double cx = c[0];
@@ -204,8 +268,9 @@ public class AcousticRaytracer {
             int cbz = (int) Math.floor(cz);
             if (!world.isChunkLoaded(cbx >> 4, cbz >> 4)) continue;
 
-            Material portalMat = world.getBlockAt(cbx, cby, cbz).getType();
-            if (!portalMat.isAir() && !world.getBlockAt(cbx, cby, cbz).isPassable()) continue;
+            Block portalBlock = world.getBlockAt(cbx, cby, cbz);
+            Material portalMat = portalBlock.getType();
+            if (!portalMat.isAir() && !portalBlock.isPassable()) continue;
 
             RayResult leg1 = traceSegment(world, sx, sy, sz, cx, cy, cz, ignX, ignY, ignZ);
             RayResult leg2 = traceSegment(world, cx, cy, cz, lx, ly, lz, ignX, ignY, ignZ);
@@ -218,14 +283,36 @@ public class AcousticRaytracer {
             float diffractionMuffle = (float) Math.min(0.65, 0.14 + detour * 0.055);
 
             float totalLoss = (leg1.lossDb + leg2.lossDb) * muffleStrength + diffractionPenaltyDb;
-            float totalMuffle = (leg1.muffleScore + leg2.muffleScore) * muffleStrength + diffractionMuffle;
+            if (totalLoss >= directEffectiveLossDb) continue;
 
-            if (best == null || totalLoss < best.totalLossDb) {
-                best = new DiffractionCandidate(cx, cy, cz, totalLoss, totalMuffle);
+            float totalMuffle = (leg1.muffleScore + leg2.muffleScore) * muffleStrength + diffractionMuffle;
+            double candEnergy = Math.pow(10.0, -totalLoss / 10.0);
+
+            sumEnergy += candEnergy;
+            if (candEnergy > maxSingleEnergy) {
+                maxSingleEnergy = candEnergy;
             }
+            sumPortalX += cx * candEnergy;
+            sumPortalY += cy * candEnergy;
+            sumPortalZ += cz * candEnergy;
+            sumMuffle += totalMuffle * candEnergy;
+            validCount++;
         }
 
-        return best;
+        if (validCount == 0 || sumEnergy <= 1e-7) {
+            return null;
+        }
+
+        double effectiveEnergy = Math.min(sumEnergy * 0.42, maxSingleEnergy * 1.22);
+        float blendedLossDb = (float) (-10.0 * Math.log10(Math.max(1e-7, effectiveEnergy)));
+        float blendedMuffle = (float) (sumMuffle / sumEnergy);
+        return new DiffractionCandidate(
+                sumPortalX / sumEnergy,
+                sumPortalY / sumEnergy,
+                sumPortalZ / sumEnergy,
+                blendedLossDb,
+                blendedMuffle
+        );
     }
 
     /**

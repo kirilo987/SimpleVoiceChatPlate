@@ -38,12 +38,13 @@ public class PlatePlayerGUIListener implements Listener {
         if (slot < 0 || slot >= event.getInventory().getSize()) return;
 
         JukeboxSession session = gui.getSession();
-        if (session == null || session.tracks == null || session.tracks.isEmpty()) return;
+        if (session == null) return;
+        boolean hasTracks = session.tracks != null && !session.tracks.isEmpty();
 
         String defaultTitle = plugin.getMessages().getDefaultTrackTitle();
 
         if (gui.isPlaylist()) {
-            int maxPage = Math.max(0, (session.tracks.size() - 1) / 7);
+            int maxPage = hasTracks ? Math.max(0, (session.tracks.size() - 1) / 7) : 0;
 
             if (slot == 0 && maxPage > 0) {
                 gui.setPage(gui.getCurrentPage() > 0 ? gui.getCurrentPage() - 1 : maxPage);
@@ -57,7 +58,7 @@ public class PlatePlayerGUIListener implements Listener {
                 player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 1f, 1f);
                 return;
             }
-            if (slot >= 1 && slot <= 7) {
+            if (slot >= 1 && slot <= 7 && hasTracks) {
                 int trackIndex = (gui.getCurrentPage() * 7) + (slot - 1);
                 if (trackIndex < session.tracks.size()) {
                     session.currentIndex = trackIndex;
@@ -69,7 +70,7 @@ public class PlatePlayerGUIListener implements Listener {
                 }
                 return;
             }
-            if (slot == 38) {
+            if (slot == 38 && hasTracks) {
                 int nextIndex = session.currentIndex - 1;
                 if (nextIndex < 0) nextIndex = session.tracks.size() - 1;
                 session.currentIndex = nextIndex;
@@ -92,7 +93,7 @@ public class PlatePlayerGUIListener implements Listener {
                 player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 1f, 1f);
                 return;
             }
-            if (slot == 42) {
+            if (slot == 42 && hasTracks) {
                 int nextIndex = (session.currentIndex + 1) % session.tracks.size();
                 session.currentIndex = nextIndex;
                 plugin.getJukeboxManager().playTrackFromSession(session);
@@ -124,9 +125,9 @@ public class PlatePlayerGUIListener implements Listener {
         int rSec = plugin.getSettings().getGuiRewindSeconds();
 
         if (slot == r) {
-            updateVolume(player, vp, streamKey, -lgStep);
+            updateVolume(player, session, vp, streamKey, -lgStep);
         } else if (slot == r + 1) {
-            updateVolume(player, vp, streamKey, -smStep);
+            updateVolume(player, session, vp, streamKey, -smStep);
         } else if (slot == r + 2) {
             vp.skipBackward(streamKey, rSec);
             plugin.getMessages().sendMessage(player, "chat.rewind_back");
@@ -140,7 +141,7 @@ public class PlatePlayerGUIListener implements Listener {
                 boolean isPaused = vp.togglePause(streamKey);
                 plugin.getMessages().sendMessage(player, isPaused ? "chat.paused" : "chat.resumed");
                 player.playSound(player.getLocation(), Sound.BLOCK_LEVER_CLICK, 1f, 1f);
-            } else {
+            } else if (hasTracks) {
                 plugin.getJukeboxManager().playTrackFromSession(session);
                 plugin.getMessages().sendMessage(player, "chat.resumed");
                 player.playSound(player.getLocation(), Sound.BLOCK_LEVER_CLICK, 1f, 1f);
@@ -154,18 +155,16 @@ public class PlatePlayerGUIListener implements Listener {
             plugin.getMessages().sendMessage(player, "chat.rewind_forward");
             player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 1f, 1f);
         } else if (slot == r + 7) {
-            updateVolume(player, vp, streamKey, smStep);
+            updateVolume(player, session, vp, streamKey, smStep);
         } else if (slot == r + 8) {
-            updateVolume(player, vp, streamKey, lgStep);
+            updateVolume(player, session, vp, streamKey, lgStep);
         }
     }
 
-    private void updateVolume(Player player, VoicePlayerManager vp, String streamKey, float delta) {
-        float newVol = vp.addVolume(streamKey, delta);
-        if (newVol < 0f) {
-            plugin.getMessages().sendMessage(player, "chat.nothing_playing");
-            return;
-        }
+    private void updateVolume(Player player, JukeboxSession session, VoicePlayerManager vp, String streamKey, float delta) {
+        float newVol = Math.clamp(session.volume + delta, 0.0f, 1.5f);
+        session.volume = newVol;
+        vp.setVolume(streamKey, newVol);
         plugin.getMessages().sendMessage(player, "chat.volume_set",
                 Messages.placeholder("vol", String.valueOf(Math.round(newVol * 100))));
         player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 1f, 1f);

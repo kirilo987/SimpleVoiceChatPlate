@@ -25,7 +25,7 @@ IGNORE_FILES = {
     ".bat",
     ".env",
     "project_tree.py",
-    "dump_project.txt"  # 🚫 сам дамп не читаем
+    "dump_project.txt"
 }
 
 READABLE_EXTENSIONS = {
@@ -45,17 +45,14 @@ READABLE_EXTENSIONS = {
     ".kt"
 }
 
-# 🔒 ОГРАНИЧЕНИЕ ROOT
 ROOT = Path(__file__).parent.resolve()
 
-# 📄 файл дампа
 DUMP_FILE = ROOT / "dump_project.txt"
 
 
 def print_tree(path: Path, prefix=""):
     path = path.resolve()
 
-    # 🚫 не выходим за ROOT
     if ROOT not in path.parents and path != ROOT:
         return
 
@@ -65,7 +62,6 @@ def print_tree(path: Path, prefix=""):
         print(prefix + "⛔ Нет доступа")
         return
 
-    # 🚫 фильтр ignored
     filtered_items = [
         name for name in items
         if name not in IGNORE_DIRS and name not in IGNORE_FILES
@@ -110,11 +106,9 @@ def print_tree(path: Path, prefix=""):
 
 
 if __name__ == "__main__":
-    # 🧹 очищаем старый дамп
     if DUMP_FILE.exists():
         DUMP_FILE.unlink()
 
-    # 📤 весь print → в файл
     with open(DUMP_FILE, "w", encoding="utf-8") as dump:
         with redirect_stdout(dump):
             print(f"📂 Root: {ROOT}\n")

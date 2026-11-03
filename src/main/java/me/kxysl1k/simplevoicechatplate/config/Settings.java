@@ -36,13 +36,20 @@ public class Settings {
     public int getMaxConcurrentProcesses() { return Math.max(1, cfg().getInt("audio.max_concurrent_processes", 4)); }
 
     public int getPlaylistMaxTracks() { return Math.clamp(cfg().getInt("playlist.max_tracks", 100), 5, 500); }
+    public int getPlaylistRadioMaxTracks() { return Math.clamp(cfg().getInt("playlist.radio_max_tracks", 30), 5, 100); }
     public int getPlaylistInitialReadyTracks() { return Math.clamp(cfg().getInt("playlist.initial_ready_tracks", 3), 1, 20); }
     public int getPrefetchNextTracks() { return Math.clamp(cfg().getInt("playlist.prefetch_next_tracks", 3), 0, 10); }
     public int getPrefetchPreviousTracks() { return Math.clamp(cfg().getInt("playlist.prefetch_previous_tracks", 2), 0, 10); }
     public int getHeadPreloadSeconds() { return Math.clamp(cfg().getInt("playlist.head_preload_seconds", 12), 4, 45); }
+    public boolean isFallbackToSongRadio() { return cfg().getBoolean("playlist.fallback_to_song_radio", true); }
+    public boolean isIncognitoRadioRecommendations() { return cfg().getBoolean("playlist.incognito_radio_recommendations", true); }
+    public String getRecommendationLang() { return cfg().getString("playlist.recommendation_lang", "uk").trim(); }
+    public String getRecommendationCountry() { return cfg().getString("playlist.recommendation_country", "UA").trim().toUpperCase(Locale.ROOT); }
 
     public boolean isAcousticsEnabled() { return cfg().getBoolean("acoustics.enabled", true); }
     public boolean isThroughWallsEnabled() { return cfg().getBoolean("acoustics.through_walls", true); }
+    public boolean isVolumetricRaysEnabled() { return cfg().getBoolean("acoustics.volumetric_rays", true); }
+    public int getAcousticTransitionTimeMs() { return Math.clamp(cfg().getInt("acoustics.transition_time_ms", 650), 80, 3000); }
     public boolean isDiffractionEnabled() { return cfg().getBoolean("acoustics.diffraction_enabled", true); }
     public boolean isRoomReverbEnabled() { return cfg().getBoolean("acoustics.room_reverb_enabled", false); }
     public boolean isAirAbsorptionEnabled() { return cfg().getBoolean("acoustics.air_absorption_enabled", false); }
@@ -50,7 +57,7 @@ public class Settings {
     public float getWallMuffleStrength() { return (float) Math.max(0.0, cfg().getDouble("acoustics.wall_muffle_strength", 1.0)); }
     public float getWallBassResonance() { return (float) Math.max(0.0, cfg().getDouble("acoustics.wall_bass_resonance", 0.85)); }
     public float getMinWallGain() { return (float) Math.clamp(cfg().getDouble("acoustics.min_wall_gain", 0.04), 0.0, 1.0); }
-    public long getAcousticsUpdateTicks() { return Math.max(1L, cfg().getLong("acoustics.update_interval_ticks", 3L)); }
+    public long getAcousticsUpdateTicks() { return Math.max(1L, cfg().getLong("acoustics.update_interval_ticks", 2L)); }
 
     public String getCacheFolder() { return cfg().getString("folders.cache", "cache"); }
     public boolean isCacheAutoCleanup() { return cfg().getBoolean("cache.auto_cleanup", true); }
@@ -64,7 +71,7 @@ public class Settings {
     public boolean isAutoUpdateYtDlp() { return cfg().getBoolean("youtube.auto_update", true); }
     public List<String> getBlacklistedDomains() { return cfg().getStringList("blacklist.domains"); }
 
-    public float getJukeboxVolume() { return (float) Math.clamp(cfg().getDouble("jukebox.volume_multiplier", 0.75), 0.0, 1.5); }
+    public float getJukeboxVolume() { return (float) Math.clamp(cfg().getDouble("jukebox.volume_multiplier", 0.20), 0.0, 1.5); }
     public double getJukeboxDistance() { return Math.max(4.0, cfg().getDouble("jukebox.distance", 65.0)); }
     public boolean isDropDiscOnBreak() { return cfg().getBoolean("jukebox.drop_disc_on_break", true); }
     public boolean isJukeboxLoadingAnimation() { return cfg().getBoolean("jukebox.show_loading_animation", true); }
@@ -73,7 +80,7 @@ public class Settings {
     public List<Double> getBeaconDistances() { return cfg().getDoubleList("jukebox.beacon_like_distances"); }
 
     public boolean isGoatHornEnabled() { return cfg().getBoolean("goat_horn.enabled", true); }
-    public float getGoatHornVolume() { return (float) Math.clamp(cfg().getDouble("goat_horn.volume_multiplier", 0.85), 0.0, 1.5); }
+    public float getGoatHornVolume() { return (float) Math.clamp(cfg().getDouble("goat_horn.volume_multiplier", 0.20), 0.0, 1.5); }
     public double getGoatHornDistance() { return Math.max(4.0, cfg().getDouble("goat_horn.distance", 24.0)); }
     public long getGoatHornMaxDurationSeconds() { return Math.max(1L, cfg().getLong("goat_horn.max_duration_seconds", 15L)); }
     public int getGoatHornCooldownTicks() { return Math.max(0, cfg().getInt("goat_horn.cooldown_ticks", 100)); }
@@ -83,7 +90,7 @@ public class Settings {
     public boolean isGoatHornStoppedNotification() { return cfg().getBoolean("goat_horn.show_stopped_notification", true); }
 
     public boolean isPortablePlayerEnabled() { return cfg().getBoolean("portable_player.enabled", false); }
-    public float getPortablePlayerVolume() { return (float) Math.clamp(cfg().getDouble("portable_player.volume_multiplier", 0.60), 0.0, 1.5); }
+    public float getPortablePlayerVolume() { return (float) Math.clamp(cfg().getDouble("portable_player.volume_multiplier", 0.20), 0.0, 1.5); }
     public double getPortablePlayerDistance() { return Math.max(4.0, cfg().getDouble("portable_player.distance", 18.0)); }
     public boolean isPortableLoadingAnimation() { return cfg().getBoolean("portable_player.show_loading_animation", true); }
     public boolean isPortablePlayingNotification() { return cfg().getBoolean("portable_player.show_playing_notification", true); }

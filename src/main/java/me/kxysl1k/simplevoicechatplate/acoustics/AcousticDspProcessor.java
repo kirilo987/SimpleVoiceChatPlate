@@ -19,16 +19,20 @@ public final class AcousticDspProcessor {
 
     private static final float SAMPLE_RATE = 48000.0f;
     private static final int FRAME_SIZE = 960;
+    private static final float MIN_ACOUSTIC_DB = -66.0f;
 
     private volatile float targetGain = 1.0f;
     private volatile float targetCutoffHz = 20000.0f;
     private volatile float targetBassBoostDb = 0.0f;
     private volatile float targetReverbWet = 0.0f;
+    private volatile float smoothingAlpha = 0.09f;
 
-    private float currentGain = 1.0f;
+    private float currentGainDb = 0.0f;
+    private float logCurrentCutoff = (float) Math.log(20000.0);
     private float currentCutoffHz = 20000.0f;
     private float currentBassBoostDb = 0.0f;
     private float currentReverbWet = 0.0f;
+    private float prevFrameTotalGain = -1.0f;
 
     private float lpB0 = 1.0f, lpB1 = 0.0f, lpB2 = 0.0f, lpA1 = 0.0f, lpA2 = 0.0f;
     private float lp1Z1 = 0.0f, lp1Z2 = 0.0f;
@@ -51,16 +55,20 @@ public final class AcousticDspProcessor {
     private final short[] outputBuffer = new short[FRAME_SIZE];
     private boolean initialized = false;
 
-    public void updateTargets(AcousticEnvironment env) {
+    public void updateTargets(AcousticEnvironment env, int transitionTimeMs) {
         if (env == null) return;
         this.targetGain = env.gainMultiplier();
         this.targetCutoffHz = env.cutoffHz();
         this.targetBassBoostDb = env.bassBoostDb();
         this.targetReverbWet = env.reverbWet();
 
+        double tauMs = Math.max(25.0, transitionTimeMs / 3.0);
+        this.smoothingAlpha = (float) Math.clamp(1.0 - Math.exp(-20.0 / tauMs), 0.015, 0.65);
+
         if (!initialized) {
-            this.currentGain = targetGain;
-            this.currentCutoffHz = targetCutoffHz;
+            this.currentGainDb = linearToDb(targetGain);
+            this.currentCutoffHz = Math.clamp(targetCutoffHz, 150.0f, 20000.0f);
+            this.logCurrentCutoff = (float) Math.log(this.currentCutoffHz);
             this.currentBassBoostDb = targetBassBoostDb;
             this.currentReverbWet = targetReverbWet;
             recomputeLowPass(currentCutoffHz);
@@ -71,23 +79,31 @@ public final class AcousticDspProcessor {
 
     public short[] processFrame(float[] normalizedMonoInput, float streamVolume, float envelopeMultiplier) {
         float tGain = targetGain;
-        float tCutoff = targetCutoffHz;
+        float tCutoff = Math.clamp(targetCutoffHz, 150.0f, 20000.0f);
         float tBass = targetBassBoostDb;
         float tWet = targetReverbWet;
+        float alpha = smoothingAlpha;
 
-        currentCutoffHz += (tCutoff - currentCutoffHz) * 0.22f;
-        currentBassBoostDb += (tBass - currentBassBoostDb) * 0.22f;
-        currentReverbWet += (tWet - currentReverbWet) * 0.20f;
+        float targetGainDb = linearToDb(tGain);
+        currentGainDb += (targetGainDb - currentGainDb) * alpha;
+        float smoothedAcousticGain = dbToLinear(currentGainDb);
 
-        if (Math.abs(currentCutoffHz - lastComputedCutoff) > currentCutoffHz * 0.015f) {
+        float targetLogCutoff = (float) Math.log(tCutoff);
+        logCurrentCutoff += (targetLogCutoff - logCurrentCutoff) * alpha;
+        currentCutoffHz = Math.clamp((float) Math.exp(logCurrentCutoff), 150.0f, 20000.0f);
+
+        currentBassBoostDb += (tBass - currentBassBoostDb) * alpha;
+        currentReverbWet += (tWet - currentReverbWet) * alpha;
+
+        if (Math.abs(currentCutoffHz - lastComputedCutoff) > currentCutoffHz * 0.012f) {
             recomputeLowPass(currentCutoffHz);
         }
-        if (Math.abs(currentBassBoostDb - lastComputedBassDb) > 0.08f) {
+        if (Math.abs(currentBassBoostDb - lastComputedBassDb) > 0.06f) {
             recomputeBassEq(currentBassBoostDb);
         }
 
-        boolean applyLowPass = currentCutoffHz < 19400.0f;
-        boolean applyBassEq = currentBassBoostDb > 0.1f;
+        boolean applyLowPass = currentCutoffHz < 19500.0f;
+        boolean applyBassEq = currentBassBoostDb > 0.08f;
         boolean applyReverb = currentReverbWet > 0.005f;
         if (!applyLowPass) {
             lp1Z1 = lp1Z2 = lp2Z1 = lp2Z2 = 0.0f;
@@ -98,9 +114,10 @@ public final class AcousticDspProcessor {
         float wet = currentReverbWet;
         float dry = 1.0f - wet * 0.25f;
 
-        float targetTotalGain = tGain * streamVolume * envelopeMultiplier;
-        float gainStep = (targetTotalGain - currentGain) / FRAME_SIZE;
-        float g = currentGain;
+        float endTotalGain = smoothedAcousticGain * streamVolume * envelopeMultiplier;
+        float startTotalGain = prevFrameTotalGain < 0.0f ? endTotalGain : prevFrameTotalGain;
+        float gainStep = (endTotalGain - startTotalGain) / FRAME_SIZE;
+        float g = startTotalGain;
 
         for (int i = 0; i < FRAME_SIZE; i++) {
             g += gainStep;
@@ -154,8 +171,27 @@ public final class AcousticDspProcessor {
             outputBuffer[i] = (short) Math.round(x * 32767.0f);
         }
 
-        currentGain = targetTotalGain;
+        prevFrameTotalGain = endTotalGain;
         return outputBuffer;
+    }
+
+    private static float linearToDb(float gain) {
+        if (gain <= 0.0005f) {
+            return MIN_ACOUSTIC_DB;
+        }
+        return Math.max(MIN_ACOUSTIC_DB, (float) (20.0 * Math.log10(gain)));
+    }
+
+    private static float dbToLinear(float db) {
+        if (db <= MIN_ACOUSTIC_DB + 0.25f) {
+            return 0.0f;
+        }
+        float lin = (float) Math.pow(10.0, db / 20.0);
+        if (db < -56.0f) {
+            float fade = (db - MIN_ACOUSTIC_DB) / (-56.0f - MIN_ACOUSTIC_DB);
+            lin *= Math.clamp(fade, 0.0f, 1.0f);
+        }
+        return lin;
     }
 
     private void recomputeLowPass(float cutoffHz) {

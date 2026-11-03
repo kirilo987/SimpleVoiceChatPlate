@@ -31,6 +31,7 @@ import java.util.regex.Pattern;
 public class AnvilListener implements Listener {
 
     private static final Pattern LIST_PARAM_PATTERN = Pattern.compile("[?&]list=([a-zA-Z0-9_-]+)");
+    private static final Pattern VIDEO_ID_PARAM_PATTERN = Pattern.compile("(?:[?&]v=|youtu\\.be/|/shorts/)([a-zA-Z0-9_-]{11})");
 
     private final SimpleVoiceChatPlate plugin;
 
@@ -42,6 +43,16 @@ public class AnvilListener implements Listener {
         if (input == null || input.isBlank()) return "";
         input = input.trim();
 
+        String lowerInput = input.toLowerCase();
+        if (lowerInput.startsWith("mix:") || lowerInput.startsWith("radio:")) {
+            String rawTarget = input.substring(input.indexOf(':') + 1).trim();
+            String vid = extractVideoIdSimple(rawTarget);
+            if (vid != null) {
+                return "https://www.youtube.com/watch?v=" + vid + "&list=RD" + vid + "&start_radio=1";
+            }
+            input = rawTarget;
+        }
+
         String result;
         if (input.startsWith("http://") || input.startsWith("https://") || input.startsWith("local:")) {
             result = input;
@@ -51,9 +62,12 @@ public class AnvilListener implements Listener {
                     || upper.startsWith("FL") || upper.startsWith("LL")
                     || upper.startsWith("RDCLAK") || upper.startsWith("RDTMAK")) {
                 result = "https://www.youtube.com/playlist?list=" + input;
+            } else if (upper.startsWith("RDAMVM") && input.length() == 17) {
+                String videoId = input.substring(6);
+                result = "https://music.youtube.com/watch?v=" + videoId + "&list=" + input;
             } else if (upper.startsWith("RD") && input.length() == 13) {
                 String videoId = input.substring(2);
-                result = "https://www.youtube.com/watch?v=" + videoId + "&list=" + input;
+                result = "https://www.youtube.com/watch?v=" + videoId + "&list=" + input + "&start_radio=1";
             } else if (input.length() == 11 && !input.contains(" ") && !input.contains("/")) {
                 result = "https://youtu.be/" + input;
             } else if (input.contains("list=") || input.contains("watch?v=")) {
@@ -71,15 +85,28 @@ public class AnvilListener implements Listener {
             if (m.find()) {
                 String listId = m.group(1);
                 String upperList = listId.toUpperCase();
-                if (upperList.startsWith("RD") && !upperList.startsWith("RDCL") && !upperList.startsWith("RDTM")
+                if (upperList.startsWith("RDAMVM") && listId.length() == 17) {
+                    String videoId = listId.substring(6);
+                    result = "https://music.youtube.com/watch?v=" + videoId + "&list=" + listId;
+                } else if (upperList.startsWith("RD") && !upperList.startsWith("RDCL") && !upperList.startsWith("RDTM")
                         && !upperList.startsWith("RDAO") && listId.length() == 13) {
                     String videoId = listId.substring(2);
-                    result = "https://www.youtube.com/watch?v=" + videoId + "&list=" + listId;
+                    result = "https://www.youtube.com/watch?v=" + videoId + "&list=" + listId + "&start_radio=1";
                 }
             }
         }
 
         return result;
+    }
+
+    private static String extractVideoIdSimple(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        String trimmed = raw.trim();
+        if (trimmed.length() == 11 && trimmed.matches("[a-zA-Z0-9_-]{11}")) {
+            return trimmed;
+        }
+        Matcher m = VIDEO_ID_PARAM_PATTERN.matcher(trimmed);
+        return m.find() ? m.group(1) : null;
     }
 
     private boolean isValidSource(String text) {

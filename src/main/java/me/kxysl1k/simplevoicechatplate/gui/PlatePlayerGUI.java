@@ -32,6 +32,7 @@ public class PlatePlayerGUI implements InventoryHolder {
     private final Inventory inventory;
 
     private int currentPage = 0;
+    private int lastRenderedTrackIndex = -1;
     private final JukeboxManager.JukeboxSession session;
     private List<String> playlistTracks = List.of();
     private boolean isPlaylist = false;
@@ -57,6 +58,7 @@ public class PlatePlayerGUI implements InventoryHolder {
         if (session != null) {
             this.isPlaylist = session.isPlaylist;
             this.playlistTracks = session.tracks != null ? session.tracks : List.of();
+            this.currentPage = Math.max(0, session.guiPage);
         }
 
         int size = isPlaylist ? 54 : 27;
@@ -68,8 +70,17 @@ public class PlatePlayerGUI implements InventoryHolder {
     }
 
     public void setupGUI() {
-        if (session != null && session.isPlaylist && session.tracks != null) {
-            this.playlistTracks = session.tracks;
+        if (session != null) {
+            if (session.isPlaylist && session.tracks != null) {
+                this.playlistTracks = session.tracks;
+            }
+            this.lastRenderedTrackIndex = session.currentIndex;
+        }
+        if (isPlaylist && playlistTracks != null && !playlistTracks.isEmpty()) {
+            int maxPage = Math.max(0, (playlistTracks.size() - 1) / 7);
+            if (currentPage > maxPage) {
+                setPage(maxPage);
+            }
         }
         inventory.clear();
 
@@ -230,8 +241,9 @@ public class PlatePlayerGUI implements InventoryHolder {
                     this.cancel();
                     return;
                 }
-                if (session != null && session.isPlaylist && session.tracks != null
-                        && session.tracks.size() != playlistTracks.size()) {
+                if (session != null && ((session.isPlaylist && session.tracks != null
+                        && session.tracks.size() != playlistTracks.size())
+                        || session.currentIndex != lastRenderedTrackIndex)) {
                     setupGUI();
                     return;
                 }
@@ -278,6 +290,11 @@ public class PlatePlayerGUI implements InventoryHolder {
     public boolean isPlaylist() { return isPlaylist; }
     @Override public @NotNull Inventory getInventory() { return inventory; }
     public int getCurrentPage() { return currentPage; }
-    public void setPage(int page) { this.currentPage = page; }
+    public void setPage(int page) {
+        this.currentPage = Math.max(0, page);
+        if (session != null) {
+            session.guiPage = this.currentPage;
+        }
+    }
     public void refresh() { setupGUI(); }
 }

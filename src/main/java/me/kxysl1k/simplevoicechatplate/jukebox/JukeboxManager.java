@@ -47,7 +47,7 @@ public class JukeboxManager {
     public void registerCustomJukebox(Location loc) {
         BlockPosKey key = BlockPosKey.of(loc);
         if (key != null) {
-            activeSessions.putIfAbsent(key, new JukeboxSession(key));
+            activeSessions.putIfAbsent(key, new JukeboxSession(key, plugin.getSettings().getJukeboxVolume()));
             activePackedCoords.add(key.packedCoords());
         }
     }
@@ -77,7 +77,13 @@ public class JukeboxManager {
         BlockPosKey key = BlockPosKey.of(jukeboxBlock);
         if (key == null) return null;
         JukeboxSession existing = activeSessions.get(key);
-        if (existing != null && existing.tracks != null && !existing.tracks.isEmpty()) {
+        if (existing != null) {
+            if ((existing.tracks == null || existing.tracks.isEmpty())
+                    && jukeboxBlock.getType() == Material.JUKEBOX
+                    && jukeboxBlock.getState() instanceof Jukebox jb
+                    && plugin.getDiscManager().isCustomDisc(jb.getRecord())) {
+                populateSessionTracksFromDisc(existing, jb.getRecord());
+            }
             return existing;
         }
         if (jukeboxBlock.getType() == Material.JUKEBOX && jukeboxBlock.getState() instanceof Jukebox jb) {
@@ -85,13 +91,13 @@ public class JukeboxManager {
             if (plugin.getDiscManager().isCustomDisc(record)) {
                 JukeboxSession restored = buildSessionFromDisc(key, record);
                 if (restored != null) {
-                    activeSessions.put(key, restored);
+                    JukeboxSession prev = activeSessions.putIfAbsent(key, restored);
                     activePackedCoords.add(key.packedCoords());
-                    return restored;
+                    return prev != null ? prev : restored;
                 }
             }
         }
-        return existing;
+        return null;
     }
 
     public void refreshPlaylistTracks(String playlistId, List<String> updatedTracks) {
@@ -125,7 +131,15 @@ public class JukeboxManager {
         String source = plugin.getDiscManager().getSource(discItem).orElse(null);
         if (source == null) return null;
 
-        JukeboxSession session = new JukeboxSession(key);
+        JukeboxSession session = new JukeboxSession(key, plugin.getSettings().getJukeboxVolume());
+        populateSessionTracksFromDisc(session, discItem);
+        return session;
+    }
+
+    private void populateSessionTracksFromDisc(JukeboxSession session, ItemStack discItem) {
+        String source = plugin.getDiscManager().getSource(discItem).orElse(null);
+        if (source == null) return;
+
         if (source.startsWith("playlist:")) {
             String plId = source.substring("playlist:".length());
             List<String> tracks = plugin.getPlaylistManager().getPlaylist(plId);
@@ -141,7 +155,6 @@ public class JukeboxManager {
             }
             session.tracks = List.of(PlaylistManager.formatEntry(title, source));
         }
-        return session;
     }
 
     public void silenceVanillaJukebox(Block jukeboxBlock) {
@@ -173,10 +186,17 @@ public class JukeboxManager {
 
         vp.stopAudio(posKey.toStreamKey());
 
-        JukeboxSession session = buildSessionFromDisc(posKey, discItem);
-        if (session == null) return;
-
-        activeSessions.put(posKey, session);
+        JukeboxSession existingSession = activeSessions.get(posKey);
+        final JukeboxSession session;
+        if (existingSession != null) {
+            populateSessionTracksFromDisc(existingSession, discItem);
+            session = existingSession;
+        } else {
+            JukeboxSession built = buildSessionFromDisc(posKey, discItem);
+            if (built == null) return;
+            session = built;
+            activeSessions.put(posKey, session);
+        }
         activePackedCoords.add(posKey.packedCoords());
 
         silenceVanillaJukebox(jukebox);
@@ -360,7 +380,7 @@ public class JukeboxManager {
                     }
                 });
 
-                vp.playAudioAtJukebox(block, streamHandle, url, onHalfway, onFinish);
+                vp.playAudioAtJukebox(block, streamHandle, url, session.volume, onHalfway, onFinish);
             });
         }).exceptionally(ex -> {
             plugin.getLoadingBarAnimator().stop(animKey);
@@ -479,13 +499,16 @@ public class JukeboxManager {
         public boolean isPlaylist = false;
         public String playlistId = null;
         public volatile List<String> tracks = List.of();
-        public int currentIndex = 0;
-        public boolean shuffle = false;
-        public int repeatMode = 0;
+        public volatile int currentIndex = 0;
+        public volatile boolean shuffle = false;
+        public volatile int repeatMode = 0;
+        public volatile float volume;
+        public volatile int guiPage = 0;
         public volatile String expectedUrl = null;
 
-        public JukeboxSession(BlockPosKey posKey) {
+        public JukeboxSession(BlockPosKey posKey, float initialVolume) {
             this.posKey = posKey;
+            this.volume = Math.clamp(initialVolume, 0.0f, 1.5f);
         }
     }
 }

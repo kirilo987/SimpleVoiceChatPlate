@@ -770,7 +770,7 @@ public class PlateCommand implements CommandExecutor, TabCompleter {
             switch (sub) {
                 case "volume" -> {
                     if (sender.hasPermission("simplevoicechatplate.command.horn.volume")) {
-                        completions.addAll(List.of("50", "75", "85", "100", "125", "150"));
+                        completions.addAll(List.of("20", "50", "75", "100", "125", "150"));
                     }
                 }
                 case "distance" -> {

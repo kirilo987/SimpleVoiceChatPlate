@@ -104,6 +104,14 @@ public class VoicePlayerManager {
         return -1f;
     }
 
+    public void setVolume(String streamKey, float volume) {
+        if (streamKey == null) return;
+        ActiveStream stream = activeStreams.get(streamKey);
+        if (stream != null) {
+            stream.setVolume(Math.clamp(volume, 0.0f, 1.5f));
+        }
+    }
+
     public float getVolume(String streamKey) {
         ActiveStream stream = activeStreams.get(streamKey);
         return stream != null ? stream.getVolume() : -1f;
@@ -143,10 +151,21 @@ public class VoicePlayerManager {
     }
 
     public void playAudioAtJukebox(Block jukeboxBlock, File pcmFile, String trackId, Runnable onHalfway, Runnable onFinish) {
-        playAudioAtJukebox(jukeboxBlock, PcmStreamHandle.completed(pcmFile), trackId, onHalfway, onFinish);
+        playAudioAtJukebox(jukeboxBlock, PcmStreamHandle.completed(pcmFile), trackId, plugin.getSettings().getJukeboxVolume(), onHalfway, onFinish);
     }
 
     public void playAudioAtJukebox(Block jukeboxBlock, PcmStreamHandle streamHandle, String trackId, Runnable onHalfway, Runnable onFinish) {
+        playAudioAtJukebox(jukeboxBlock, streamHandle, trackId, plugin.getSettings().getJukeboxVolume(), onHalfway, onFinish);
+    }
+
+    public void playAudioAtJukebox(
+            Block jukeboxBlock,
+            PcmStreamHandle streamHandle,
+            String trackId,
+            float initialVolume,
+            Runnable onHalfway,
+            Runnable onFinish
+    ) {
         BlockPosKey posKey = BlockPosKey.of(jukeboxBlock.getLocation());
         if (posKey == null || streamHandle == null) return;
         String streamKey = posKey.toStreamKey();
@@ -157,7 +176,7 @@ public class VoicePlayerManager {
         if (api == null) return;
 
         double distance = AcousticRaytracer.calculateJukeboxDistance(jukeboxBlock, plugin.getSettings());
-        float volume = plugin.getSettings().getJukeboxVolume();
+        float volume = Math.clamp(initialVolume, 0.0f, 1.5f);
         String categoryId = vcIntegration.getMusicCategory() != null
                 ? vcIntegration.getMusicCategory().getId()
                 : VoiceChatIntegration.MUSIC_CATEGORY_ID;
@@ -433,13 +452,19 @@ public class VoicePlayerManager {
         final LocationalAudioChannel channel;
         final OpusEncoder encoder;
         final AcousticDspProcessor dsp;
+        double smoothX;
+        double smoothY;
+        double smoothZ;
         volatile boolean closed = false;
 
-        ListenerEndpoint(UUID listenerUuid, LocationalAudioChannel channel, OpusEncoder encoder) {
+        ListenerEndpoint(UUID listenerUuid, LocationalAudioChannel channel, OpusEncoder encoder, double initX, double initY, double initZ) {
             this.listenerUuid = listenerUuid;
             this.channel = channel;
             this.encoder = encoder;
             this.dsp = new AcousticDspProcessor();
+            this.smoothX = initX;
+            this.smoothY = initY;
+            this.smoothZ = initZ;
         }
 
         synchronized void sendProcessedFrame(float[] monoNormalized, float streamVolume, float envelope) {
@@ -567,22 +592,34 @@ public class VoicePlayerManager {
 
         void upsertListener(VoicechatServerApi vcApi, ServerLevel level, UUID listenerUuid, AcousticEnvironment env, float distance) {
             if (!running) return;
-            Position apparentPos = vcApi.createPosition(env.apparentX(), env.apparentY(), env.apparentZ());
+            Position initialPos = vcApi.createPosition(env.apparentX(), env.apparentY(), env.apparentZ());
 
             ListenerEndpoint endpoint = listeners.computeIfAbsent(listenerUuid, id -> {
-                LocationalAudioChannel channel = vcApi.createLocationalAudioChannel(UUID.randomUUID(), level, apparentPos);
+                LocationalAudioChannel channel = vcApi.createLocationalAudioChannel(UUID.randomUUID(), level, initialPos);
                 if (channel == null) return null;
                 channel.setCategory(categoryId);
                 channel.setDistance(distance);
                 channel.setFilter(serverPlayer -> serverPlayer.getUuid().equals(id));
                 OpusEncoder encoder = vcApi.createEncoder(resolveOpusMode());
-                return new ListenerEndpoint(id, channel, encoder);
+                return new ListenerEndpoint(id, channel, encoder, env.apparentX(), env.apparentY(), env.apparentZ());
             });
 
             if (endpoint != null && !endpoint.closed) {
+                double dx = env.apparentX() - endpoint.smoothX;
+                double dy = env.apparentY() - endpoint.smoothY;
+                double dz = env.apparentZ() - endpoint.smoothZ;
+                if (dx * dx + dy * dy + dz * dz > 256.0) {
+                    endpoint.smoothX = env.apparentX();
+                    endpoint.smoothY = env.apparentY();
+                    endpoint.smoothZ = env.apparentZ();
+                } else {
+                    endpoint.smoothX += dx * 0.25;
+                    endpoint.smoothY += dy * 0.25;
+                    endpoint.smoothZ += dz * 0.25;
+                }
                 endpoint.channel.setDistance(distance);
-                endpoint.channel.updateLocation(apparentPos);
-                endpoint.dsp.updateTargets(env);
+                endpoint.channel.updateLocation(vcApi.createPosition(endpoint.smoothX, endpoint.smoothY, endpoint.smoothZ));
+                endpoint.dsp.updateTargets(env, plugin.getSettings().getAcousticTransitionTimeMs());
             }
         }
 

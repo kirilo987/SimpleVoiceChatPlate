@@ -1,0 +1,7 @@
+.gradle/
+build/
+.idea/
+*.iml
+dump_project.txt
+.DS_Store
+Thumbs.db

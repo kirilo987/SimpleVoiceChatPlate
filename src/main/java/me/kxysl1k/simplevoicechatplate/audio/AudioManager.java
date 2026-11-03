@@ -22,18 +22,26 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Scanner;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class AudioManager {
+
+    private static final Pattern YT_VIDEO_V_PATTERN = Pattern.compile("[?&]v=([a-zA-Z0-9_-]{11})");
+    private static final Pattern YT_SHORT_URL_PATTERN = Pattern.compile("(?:youtu\\.be/|youtube\\.com/shorts/)([a-zA-Z0-9_-]{11})");
+    private static final Pattern YT_LIST_PATTERN = Pattern.compile("[?&]list=([a-zA-Z0-9_-]+)");
 
     private final SimpleVoiceChatPlate plugin;
     private final AudioConverter converter;
@@ -304,8 +312,10 @@ public class AudioManager {
 
     public static boolean isPlaylistUrl(String url) {
         if (url == null) return false;
-        String lower = url.toLowerCase();
-        return lower.contains("list=")
+        String lower = url.trim().toLowerCase(Locale.ROOT);
+        return lower.startsWith("mix:")
+                || lower.startsWith("radio:")
+                || lower.contains("list=")
                 || lower.contains("/playlist")
                 || lower.contains("/sets/")
                 || lower.contains("drive.google.com/drive/folders/")
@@ -553,6 +563,9 @@ public class AudioManager {
      *    (например, 3 трека за ~1 секунду), сразу вызывает onInitialBatch, позволяя мгновенно выдать готовую пластинку
      *    и начать предзагрузку первой песни, пока оставшиеся треки плейлиста дочитываются в фоне до onComplete.
      */
+    private record ExtractionAttemptResult(List<String> tracks, int exitCode, List<String> command, String errorOutput) {
+    }
+
     public void fetchPlaylistProgressive(
             String url,
             Consumer<List<String>> onInitialBatch,
@@ -568,6 +581,7 @@ public class AudioManager {
 
         String defaultTitle = plugin.getMessages().getDefaultTrackTitle();
         int maxTracks = plugin.getSettings().getPlaylistMaxTracks();
+        int radioMaxTracks = plugin.getSettings().getPlaylistRadioMaxTracks();
         int initialBatchCount = plugin.getSettings().getPlaylistInitialReadyTracks();
 
         Thread.ofVirtual().name("svcplate-fetch-playlist").start(() -> {
@@ -606,90 +620,116 @@ public class AudioManager {
                     return;
                 }
 
-                String normalizedUrl = normalizePlaylistUrl(url);
                 File cookiesFile = new File(plugin.getDataFolder(), "cookies.txt");
+                boolean isYouTube = isYouTubeUrl(url);
+                String listId = isYouTube ? extractYouTubeListId(url) : null;
+                String videoId = isYouTube ? extractYouTubeVideoId(url, listId) : null;
+                boolean isDynamicRadio = isYouTube && isDynamicRadioListId(listId);
 
-                String[] tabStrategies = {"", "youtube:player_client=web,mweb"};
-                List<String> tracks = new ArrayList<>();
-                StringBuilder errorOutput = new StringBuilder();
-                int lastExitCode = -1;
-                List<String> lastCommand = List.of();
-                boolean initialFired = false;
+                AtomicBoolean initialFired = new AtomicBoolean(false);
+                List<String> finalTracks = List.of();
+                ExtractionAttemptResult lastAttempt = null;
 
-                for (String strategy : tabStrategies) {
-                    tracks.clear();
-                    errorOutput.setLength(0);
+                if (!isDynamicRadio) {
+                    String staticTargetUrl = (isYouTube && listId != null)
+                            ? "https://www.youtube.com/playlist?list=" + listId
+                            : url.trim();
 
-                    List<String> command = new ArrayList<>();
-                    command.add(ytDlp.getAbsolutePath());
-                    command.add("--yes-playlist");
-                    command.add("--flat-playlist");
-                    command.add("--dump-json");
-                    command.add("--ignore-errors");
-                    command.add("--no-warnings");
-                    command.add("--playlist-end");
-                    command.add(String.valueOf(maxTracks));
-                    command.add("-4");
+                    String[] staticStrategies = {"", "youtube:player_client=web,mweb"};
+                    boolean[] cookieModes = cookiesFile.exists() ? new boolean[]{false, true} : new boolean[]{false};
 
-                    if (!strategy.isEmpty()) {
-                        command.add("--extractor-args");
-                        command.add(strategy);
-                    }
-                    if (cookiesFile.exists()) {
-                        command.add("--cookies");
-                        command.add(cookiesFile.getAbsolutePath());
-                    }
-                    command.add(normalizedUrl);
-                    lastCommand = command;
-
-                    ProcessBuilder builder = new ProcessBuilder(command);
-                    builder.environment().put("TMPDIR", plugin.getDataFolder().getAbsolutePath());
-                    builder.redirectErrorStream(true);
-                    Process process = builder.start();
-
-                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            String trimmed = line.trim();
-                            if (trimmed.startsWith("{")) {
-                                String formatted = parsePlaylistJsonEntry(trimmed, defaultTitle);
-                                if (formatted != null) {
-                                    tracks.add(formatted);
-                                    if (!initialFired && tracks.size() >= initialBatchCount) {
-                                        initialFired = true;
-                                        if (onInitialBatch != null) {
-                                            onInitialBatch.accept(List.copyOf(tracks));
-                                        }
-                                    }
-                                }
-                            } else if (!trimmed.isEmpty()) {
-                                errorOutput.append(trimmed).append("\n");
+                    outerStatic:
+                    for (boolean useCookies : cookieModes) {
+                        for (String strategy : staticStrategies) {
+                            lastAttempt = runYtDlpPlaylistExtraction(
+                                    ytDlp,
+                                    staticTargetUrl,
+                                    maxTracks,
+                                    initialBatchCount,
+                                    strategy,
+                                    useCookies ? cookiesFile : null,
+                                    false,
+                                    "",
+                                    "",
+                                    defaultTitle,
+                                    initialFired,
+                                    onInitialBatch
+                            );
+                            if (!lastAttempt.tracks().isEmpty()) {
+                                finalTracks = lastAttempt.tracks();
+                                break outerStatic;
                             }
                         }
                     }
 
-                    lastExitCode = process.waitFor();
-                    if (!tracks.isEmpty()) {
-                        break;
+                    if (finalTracks.isEmpty() && isYouTube && videoId != null && plugin.getSettings().isFallbackToSongRadio()) {
+                        LogUtil.debug("Original playlist unavailable for list=" + listId
+                                + "; falling back to clean Song Radio anchored on v=" + videoId);
+                        isDynamicRadio = true;
                     }
                 }
 
-                if (tracks.isEmpty() && lastExitCode != 0) {
-                    AudioProcessingException.ErrorType errorType = AudioProcessingException.classifyFromOutput(errorOutput.toString());
+                if (isDynamicRadio && finalTracks.isEmpty()) {
+                    boolean incognito = plugin.getSettings().isIncognitoRadioRecommendations();
+                    File radioCookies = (!incognito && cookiesFile.exists()) ? cookiesFile : null;
+                    String recLang = plugin.getSettings().getRecommendationLang();
+                    String recCountry = plugin.getSettings().getRecommendationCountry();
+
+                    List<String> radioCandidates = buildSongRadioCandidates(url, videoId);
+                    String[] radioStrategies = {"", "youtube:player_client=web,mweb"};
+                    int minBatchForRadio = Math.max(2, initialBatchCount);
+                    List<String> bestPartial = List.of();
+
+                    outerRadio:
+                    for (String candidateUrl : radioCandidates) {
+                        for (String strategy : radioStrategies) {
+                            lastAttempt = runYtDlpPlaylistExtraction(
+                                    ytDlp,
+                                    candidateUrl,
+                                    radioMaxTracks,
+                                    minBatchForRadio,
+                                    strategy,
+                                    radioCookies,
+                                    true,
+                                    recLang,
+                                    recCountry,
+                                    defaultTitle,
+                                    initialFired,
+                                    onInitialBatch
+                            );
+                            if (lastAttempt.tracks().size() >= 2) {
+                                finalTracks = lastAttempt.tracks();
+                                break outerRadio;
+                            }
+                            if (lastAttempt.tracks().size() > bestPartial.size()) {
+                                bestPartial = lastAttempt.tracks();
+                            }
+                        }
+                    }
+
+                    if (finalTracks.isEmpty() && !bestPartial.isEmpty()) {
+                        finalTracks = bestPartial;
+                    }
+                }
+
+                if (finalTracks.isEmpty() && lastAttempt != null && lastAttempt.exitCode() != 0) {
+                    AudioProcessingException.ErrorType errorType = AudioProcessingException.classifyFromOutput(lastAttempt.errorOutput());
                     Map<String, Object> context = new HashMap<>();
-                    context.put("URL", normalizedUrl);
+                    context.put("URL", url);
                     context.put("ErrorType", errorType.name());
-                    LogUtil.logProcessFailure("yt-dlp playlist", lastExitCode, String.join(" ", lastCommand), errorOutput.toString(), context);
+                    LogUtil.logProcessFailure("yt-dlp playlist", lastAttempt.exitCode(),
+                            String.join(" ", lastAttempt.command()), lastAttempt.errorOutput(), context);
                     if (onError != null) {
-                        onError.accept(new AudioProcessingException(errorType, "yt-dlp exit " + lastExitCode + ": " + errorOutput));
+                        onError.accept(new AudioProcessingException(errorType,
+                                "yt-dlp exit " + lastAttempt.exitCode() + ": " + lastAttempt.errorOutput()));
                     }
                     return;
                 }
 
-                List<String> finalSnapshot = List.copyOf(tracks);
+                List<String> finalSnapshot = List.copyOf(finalTracks);
                 if (!finalSnapshot.isEmpty()) {
                     playlistCache.put(url, finalSnapshot);
-                    if (!initialFired && onInitialBatch != null) {
+                    if (initialFired.compareAndSet(false, true) && onInitialBatch != null) {
                         onInitialBatch.accept(finalSnapshot);
                     }
                 }
@@ -705,22 +745,175 @@ public class AudioManager {
         });
     }
 
+    private ExtractionAttemptResult runYtDlpPlaylistExtraction(
+            File ytDlp,
+            String targetUrl,
+            int maxEntries,
+            int initialBatchThreshold,
+            String baseExtractorStrategy,
+            File cookiesOrNull,
+            boolean cleanNoCache,
+            String recLang,
+            String recCountry,
+            String defaultTitle,
+            AtomicBoolean initialFired,
+            Consumer<List<String>> onInitialBatch
+    ) throws Exception {
+        List<String> command = new ArrayList<>();
+        command.add(ytDlp.getAbsolutePath());
+        command.add("--yes-playlist");
+        command.add("--flat-playlist");
+        command.add("--dump-json");
+        command.add("--ignore-errors");
+        command.add("--no-warnings");
+        command.add("--no-cache-dir");
+        command.add("--playlist-end");
+        command.add(String.valueOf(maxEntries));
+        command.add("-4");
+
+        String combinedExtractorArg = combineYouTubeExtractorArgs(baseExtractorStrategy, cleanNoCache ? recLang : "");
+        if (!combinedExtractorArg.isEmpty()) {
+            command.add("--extractor-args");
+            command.add(combinedExtractorArg);
+        }
+
+        if (cleanNoCache) {
+            if (recLang != null && !recLang.isEmpty()) {
+                String primaryTag = (recCountry != null && recCountry.length() == 2)
+                        ? recLang + "-" + recCountry
+                        : recLang;
+                command.add("--add-header");
+                command.add("Accept-Language: " + primaryTag + "," + recLang + ";q=0.9,en;q=0.3");
+            }
+            if (recCountry != null && recCountry.length() == 2) {
+                command.add("--geo-bypass-country");
+                command.add(recCountry);
+            }
+        }
+
+        if (cookiesOrNull != null && cookiesOrNull.exists()) {
+            command.add("--cookies");
+            command.add(cookiesOrNull.getAbsolutePath());
+        }
+
+        command.add(targetUrl);
+
+        ProcessBuilder builder = new ProcessBuilder(command);
+        builder.environment().put("TMPDIR", plugin.getDataFolder().getAbsolutePath());
+        builder.redirectErrorStream(true);
+        Process process = builder.start();
+
+        List<String> tracks = new ArrayList<>();
+        Set<String> seenKeys = new HashSet<>();
+        StringBuilder errorOutput = new StringBuilder();
+
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String trimmed = line.trim();
+                if (trimmed.startsWith("{")) {
+                    String formatted = parsePlaylistJsonEntry(trimmed, defaultTitle);
+                    if (formatted != null) {
+                        String entryUrl = PlaylistManager.parseEntry(formatted, defaultTitle).url();
+                        String dedupKey = extractYouTubeVideoId(entryUrl, null);
+                        if (dedupKey == null || dedupKey.isEmpty()) {
+                            dedupKey = entryUrl;
+                        }
+                        if (seenKeys.add(dedupKey)) {
+                            tracks.add(formatted);
+                            if (tracks.size() >= initialBatchThreshold && initialFired.compareAndSet(false, true)) {
+                                if (onInitialBatch != null) {
+                                    onInitialBatch.accept(List.copyOf(tracks));
+                                }
+                            }
+                        }
+                    }
+                } else if (!trimmed.isEmpty()) {
+                    errorOutput.append(trimmed).append("\n");
+                }
+            }
+        }
+
+        int exitCode = process.waitFor();
+        return new ExtractionAttemptResult(tracks, exitCode, command, errorOutput.toString());
+    }
+
+    private static String combineYouTubeExtractorArgs(String baseStrategy, String lang) {
+        String cleanBase = baseStrategy == null ? "" : baseStrategy.trim();
+        String cleanLang = lang == null ? "" : lang.trim();
+        if (cleanLang.isEmpty()) {
+            return cleanBase;
+        }
+        if (cleanBase.isEmpty()) {
+            return "youtube:lang=" + cleanLang;
+        }
+        if (cleanBase.startsWith("youtube:")) {
+            return cleanBase + ";lang=" + cleanLang;
+        }
+        return cleanBase;
+    }
+
+    private static List<String> buildSongRadioCandidates(String originalUrl, String videoId) {
+        if (videoId == null || videoId.isBlank()) {
+            return List.of(originalUrl.trim());
+        }
+        String lower = originalUrl.toLowerCase(Locale.ROOT);
+        String watchRadio = "https://www.youtube.com/watch?v=" + videoId + "&list=RD" + videoId + "&start_radio=1";
+        String musicRadio = "https://music.youtube.com/watch?v=" + videoId + "&list=RDAMVM" + videoId;
+        if (lower.contains("music.youtube.com") || lower.contains("rdamvm")) {
+            return List.of(musicRadio, watchRadio);
+        }
+        return List.of(watchRadio, musicRadio);
+    }
+
+    private static boolean isYouTubeUrl(String url) {
+        if (url == null) return false;
+        String lower = url.toLowerCase(Locale.ROOT);
+        return lower.contains("youtube.com") || lower.contains("youtu.be");
+    }
+
+    private static String extractYouTubeListId(String url) {
+        if (url == null) return null;
+        Matcher m = YT_LIST_PATTERN.matcher(url);
+        return m.find() ? m.group(1) : null;
+    }
+
+    private static String extractYouTubeVideoId(String url, String listId) {
+        if (url == null) return null;
+        Matcher vm = YT_VIDEO_V_PATTERN.matcher(url);
+        if (vm.find()) {
+            return vm.group(1);
+        }
+        Matcher sm = YT_SHORT_URL_PATTERN.matcher(url);
+        if (sm.find()) {
+            return sm.group(1);
+        }
+        if (listId != null) {
+            String upper = listId.toUpperCase(Locale.ROOT);
+            if (upper.startsWith("RDAMVM") && listId.length() == 17) {
+                return listId.substring(6);
+            }
+            if (upper.startsWith("RD") && !upper.startsWith("RDCL") && !upper.startsWith("RDTM")
+                    && !upper.startsWith("RDAO") && !upper.startsWith("RDEM") && listId.length() == 13) {
+                return listId.substring(2);
+            }
+        }
+        return null;
+    }
+
+    private static boolean isDynamicRadioListId(String listId) {
+        if (listId == null || listId.isBlank()) return false;
+        String upper = listId.toUpperCase(Locale.ROOT);
+        if (upper.startsWith("RDCLAK") || upper.startsWith("RDTMAK")) {
+            return false;
+        }
+        return upper.startsWith("RD") || upper.startsWith("TLPQ");
+    }
+
     public CompletableFuture<List<String>> fetchPlaylist(String url) {
         CompletableFuture<List<String>> future = new CompletableFuture<>();
         fetchPlaylistProgressive(url, null, future::complete, future::completeExceptionally);
         return future;
-    }
-
-    private String normalizePlaylistUrl(String url) {
-        if (url == null) return "";
-        String cleaned = url.trim().replace("music.youtube.com/", "www.youtube.com/");
-        if (cleaned.contains("youtube.com/watch?") && cleaned.contains("list=") && !cleaned.contains("list=RD")) {
-            Matcher m = Pattern.compile("[?&]list=([a-zA-Z0-9_-]+)").matcher(cleaned);
-            if (m.find()) {
-                return "https://www.youtube.com/playlist?list=" + m.group(1);
-            }
-        }
-        return cleaned;
     }
 
     private String parsePlaylistJsonEntry(String jsonLine, String defaultTitle) {
