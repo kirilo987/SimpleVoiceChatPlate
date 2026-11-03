@@ -672,17 +672,20 @@ public class AudioManager {
                 if (isDynamicRadio && finalTracks.isEmpty()) {
                     boolean incognito = plugin.getSettings().isIncognitoRadioRecommendations();
                     File radioCookies = (!incognito && cookiesFile.exists()) ? cookiesFile : null;
-                    String recLang = plugin.getSettings().getRecommendationLang();
+                    String effectiveLang = resolveEffectiveRadioLanguage(videoId, plugin.getSettings().getRecommendationLang());
                     String recCountry = plugin.getSettings().getRecommendationCountry();
 
                     List<String> radioCandidates = buildSongRadioCandidates(url, videoId);
-                    String[] radioStrategies = {"", "youtube:player_client=web,mweb"};
                     int minBatchForRadio = Math.max(2, initialBatchCount);
                     List<String> bestPartial = List.of();
 
                     outerRadio:
                     for (String candidateUrl : radioCandidates) {
-                        for (String strategy : radioStrategies) {
+                        String[] strategiesForCandidate = candidateUrl.contains("music.youtube.com")
+                                ? new String[]{""}
+                                : new String[]{"", "youtube:player_client=web,mweb"};
+
+                        for (String strategy : strategiesForCandidate) {
                             lastAttempt = runYtDlpPlaylistExtraction(
                                     ytDlp,
                                     candidateUrl,
@@ -691,7 +694,7 @@ public class AudioManager {
                                     strategy,
                                     radioCookies,
                                     true,
-                                    recLang,
+                                    effectiveLang,
                                     recCountry,
                                     defaultTitle,
                                     initialFired,
@@ -853,17 +856,96 @@ public class AudioManager {
         return cleanBase;
     }
 
+    private String resolveEffectiveRadioLanguage(String videoId, String configuredLang) {
+        String cfg = configuredLang == null ? "" : configuredLang.trim().toLowerCase(Locale.ROOT);
+        if (cfg.equals("none") || cfg.equals("off")) {
+            return "";
+        }
+        if (!cfg.isEmpty() && !cfg.equals("auto")) {
+            return cfg;
+        }
+        if (videoId == null || videoId.isBlank()) {
+            return "";
+        }
+
+        try {
+            String watchUrl = "https://www.youtube.com/watch?v=" + videoId;
+            String encoded = URLEncoder.encode(watchUrl, StandardCharsets.UTF_8);
+            String oEmbedUrl = "https://www.youtube.com/oembed?url=" + encoded + "&format=json";
+            HttpURLConnection conn = (HttpURLConnection) URI.create(oEmbedUrl).toURL().openConnection();
+            conn.setConnectTimeout(2000);
+            conn.setReadTimeout(2000);
+
+            try (InputStreamReader reader = new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8)) {
+                JsonObject json = JsonParser.parseReader(reader).getAsJsonObject();
+                String title = json.has("title") && !json.get("title").isJsonNull()
+                        ? json.get("title").getAsString().trim() : "";
+                String author = json.has("author_name") && !json.get("author_name").isJsonNull()
+                        ? json.get("author_name").getAsString().trim() : "";
+                if (!title.isEmpty()) {
+                    titleCache.putIfAbsent(watchUrl, title);
+                }
+                return inferLanguageFromMetadata(title + " " + author);
+            } finally {
+                conn.disconnect();
+            }
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private static String inferLanguageFromMetadata(String text) {
+        if (text == null || text.isBlank()) return "";
+        String lower = text.toLowerCase(Locale.ROOT);
+
+        boolean hasJapaneseKana = false;
+        boolean hasKoreanHangul = false;
+        boolean hasCjk = false;
+        boolean hasArabic = false;
+        boolean hasHebrew = false;
+        boolean hasGreek = false;
+
+        for (int i = 0; i < lower.length(); i++) {
+            char c = lower.charAt(i);
+            if (c >= '\u3040' && c <= '\u30FF') hasJapaneseKana = true;
+            else if (c >= '\uAC00' && c <= '\uD7AF') hasKoreanHangul = true;
+            else if (c >= '\u4E00' && c <= '\u9FFF') hasCjk = true;
+            else if (c >= '\u0600' && c <= '\u06FF') hasArabic = true;
+            else if (c >= '\u0590' && c <= '\u05FF') hasHebrew = true;
+            else if (c >= '\u0370' && c <= '\u03FF') hasGreek = true;
+        }
+
+        if (hasJapaneseKana) return "ja";
+        if (hasKoreanHangul) return "ko";
+        if (hasCjk) return "zh";
+        if (hasArabic) return "ar";
+        if (hasHebrew) return "he";
+        if (hasGreek) return "el";
+
+        if (containsAnyChar(lower, "іїєґ")) return "uk";
+        if (containsAnyChar(lower, "ыэъё")) return "ru";
+        if (lower.indexOf('ў') >= 0) return "be";
+        if (containsAnyChar(lower, "ąćęłńśźż")) return "pl";
+        if (containsAnyChar(lower, "ğış")) return "tr";
+        if (containsAnyChar(lower, "ěščřžýů")) return "cs";
+
+        return "";
+    }
+
+    private static boolean containsAnyChar(String text, String chars) {
+        for (int i = 0; i < chars.length(); i++) {
+            if (text.indexOf(chars.charAt(i)) >= 0) return true;
+        }
+        return false;
+    }
+
     private static List<String> buildSongRadioCandidates(String originalUrl, String videoId) {
         if (videoId == null || videoId.isBlank()) {
             return List.of(originalUrl.trim());
         }
-        String lower = originalUrl.toLowerCase(Locale.ROOT);
-        String watchRadio = "https://www.youtube.com/watch?v=" + videoId + "&list=RD" + videoId + "&start_radio=1";
         String musicRadio = "https://music.youtube.com/watch?v=" + videoId + "&list=RDAMVM" + videoId;
-        if (lower.contains("music.youtube.com") || lower.contains("rdamvm")) {
-            return List.of(musicRadio, watchRadio);
-        }
-        return List.of(watchRadio, musicRadio);
+        String watchRadio = "https://www.youtube.com/watch?v=" + videoId + "&list=RD" + videoId + "&start_radio=1";
+        return List.of(musicRadio, watchRadio);
     }
 
     private static boolean isYouTubeUrl(String url) {

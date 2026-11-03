@@ -160,7 +160,9 @@ public class ConfigManager {
     private void upgradeMainConfigIfOutdated(File configFile) {
         try {
             String raw = Files.readString(configFile.toPath(), StandardCharsets.UTF_8);
-            if (!raw.contains("transition_time_ms:") || !raw.contains("incognito_radio_recommendations:")) {
+            if (!raw.contains("transition_time_ms:")
+                    || !raw.contains("incognito_radio_recommendations:")
+                    || !raw.contains("recommendation_lang: \"auto\"")) {
                 FileConfiguration oldCfg = YamlConfiguration.loadConfiguration(configFile);
                 String prevLang = oldCfg.getString("settings.language", "ru");
                 boolean prevDebug = oldCfg.getBoolean("settings.debug", false);

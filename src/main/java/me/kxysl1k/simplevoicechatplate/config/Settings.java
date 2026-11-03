@@ -43,8 +43,8 @@ public class Settings {
     public int getHeadPreloadSeconds() { return Math.clamp(cfg().getInt("playlist.head_preload_seconds", 12), 4, 45); }
     public boolean isFallbackToSongRadio() { return cfg().getBoolean("playlist.fallback_to_song_radio", true); }
     public boolean isIncognitoRadioRecommendations() { return cfg().getBoolean("playlist.incognito_radio_recommendations", true); }
-    public String getRecommendationLang() { return cfg().getString("playlist.recommendation_lang", "uk").trim(); }
-    public String getRecommendationCountry() { return cfg().getString("playlist.recommendation_country", "UA").trim().toUpperCase(Locale.ROOT); }
+    public String getRecommendationLang() { return cfg().getString("playlist.recommendation_lang", "auto").trim(); }
+    public String getRecommendationCountry() { return cfg().getString("playlist.recommendation_country", "").trim().toUpperCase(Locale.ROOT); }
 
     public boolean isAcousticsEnabled() { return cfg().getBoolean("acoustics.enabled", true); }
     public boolean isThroughWallsEnabled() { return cfg().getBoolean("acoustics.through_walls", true); }
