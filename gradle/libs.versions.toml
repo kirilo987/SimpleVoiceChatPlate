@@ -1,0 +1,15 @@
+[versions]
+paper-api = "26.3.build.237-stable"
+minecraft = "26.3"
+
+run-task = "3.0.2"
+voicechat-api = "2.6.27"
+packetevents = "2.14.0"
+
+[libraries]
+paper-api = { module = "io.papermc.paper:paper-api", version.ref = "paper-api" }
+voicechat-api = { module = "de.maxhenkel.voicechat:voicechat-api", version.ref = "voicechat-api" }
+packetevents-spigot = { module = "com.github.retrooper:packetevents-spigot", version.ref = "packetevents" }
+
+[plugins]
+run-paper = { id = "xyz.jpenilla.run-paper", version.ref = "run-task" }

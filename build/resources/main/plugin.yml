@@ -1,0 +1,138 @@
+name: SimpleVoiceChatPlate
+version: '1.0.0'
+main: me.kxysl1k.simplevoicechatplate.SimpleVoiceChatPlate
+api-version: '26.3'
+load: POSTWORLD
+author: Kxysl1k
+description: Custom music discs, goat horn soundpad, and realistic 3D acoustics via Simple Voice Chat
+website: https://kxysl1k.netlify.app
+softdepend:
+  - voicechat
+  - packetevents
+
+commands:
+  simplevoicechatplate:
+    description: Главная команда SimpleVoiceChatPlate
+    usage: /svcplate <help|burn|erase|search|horn|cancel|stoparound|status|cache|updatedeps|reload>
+    aliases:
+      - svcplate
+      - disc
+
+permissions:
+  simplevoicechatplate.admin:
+    description: Полный административный доступ ко всем командам, механикам и безлимитным квотам SimpleVoiceChatPlate
+    default: op
+    children:
+      simplevoicechatplate.command.*: true
+      simplevoicechatplate.anvil.burn: true
+      simplevoicechatplate.anvil.erase: true
+      simplevoicechatplate.burn.bypass: true
+      simplevoicechatplate.play.jukebox: true
+      simplevoicechatplate.play.horn: true
+      simplevoicechatplate.play.portable: true
+
+  simplevoicechatplate.command.*:
+    description: Доступ ко всем командам и подкомандам /svcplate (/disc)
+    default: op
+    children:
+      simplevoicechatplate.command.help: true
+      simplevoicechatplate.command.burn: true
+      simplevoicechatplate.command.erase: true
+      simplevoicechatplate.command.search: true
+      simplevoicechatplate.command.cancel: true
+      simplevoicechatplate.command.horn: true
+      simplevoicechatplate.command.horn.info: true
+      simplevoicechatplate.command.horn.volume: true
+      simplevoicechatplate.command.horn.distance: true
+      simplevoicechatplate.command.horn.duration: true
+      simplevoicechatplate.command.horn.mode: true
+      simplevoicechatplate.command.horn.notify: true
+      simplevoicechatplate.command.cancel.other: true
+      simplevoicechatplate.command.stoparound: true
+      simplevoicechatplate.command.status: true
+      simplevoicechatplate.command.cache.clear: true
+      simplevoicechatplate.command.updatedeps: true
+      simplevoicechatplate.command.reload: true
+
+  simplevoicechatplate.command.help:
+    description: Доступ к просмотру списка команд (/svcplate help)
+    default: true
+  simplevoicechatplate.command.burn:
+    description: Доступ к команде записи треков и плейлистов (/svcplate burn)
+    default: true
+  simplevoicechatplate.command.erase:
+    description: Доступ к команде очистки пластинок и рогов (/svcplate erase)
+    default: true
+  simplevoicechatplate.command.search:
+    description: Доступ к команде поиска музыки на YouTube (/svcplate search)
+    default: true
+  simplevoicechatplate.command.cancel:
+    description: Доступ к команде остановки собственного звука рога или плеера (/svcplate cancel)
+    default: true
+
+  simplevoicechatplate.command.horn:
+    description: Базовый доступ к настройкам козьих рогов (/svcplate horn)
+    default: true
+    children:
+      simplevoicechatplate.command.horn.info: true
+      simplevoicechatplate.command.horn.volume: true
+      simplevoicechatplate.command.horn.distance: true
+      simplevoicechatplate.command.horn.duration: true
+      simplevoicechatplate.command.horn.mode: true
+      simplevoicechatplate.command.horn.notify: true
+  simplevoicechatplate.command.horn.info:
+    description: Просмотр текущих параметров рога (/svcplate horn info)
+    default: true
+  simplevoicechatplate.command.horn.volume:
+    description: Настройка громкости конкретного рога (/svcplate horn volume)
+    default: true
+  simplevoicechatplate.command.horn.distance:
+    description: Настройка радиуса слышимости конкретного рога (/svcplate horn distance)
+    default: true
+  simplevoicechatplate.command.horn.duration:
+    description: Настройка длительности звучания конкретного рога (/svcplate horn duration)
+    default: true
+  simplevoicechatplate.command.horn.mode:
+    description: Настройка режима нажатия рога (/svcplate horn mode)
+    default: true
+  simplevoicechatplate.command.horn.notify:
+    description: Включение и отключение уведомлений при запуске рога (/svcplate horn notify)
+    default: true
+
+  simplevoicechatplate.command.cancel.other:
+    description: Доступ к принудительной остановке звука у другого игрока (/svcplate cancel <игрок>)
+    default: op
+  simplevoicechatplate.command.stoparound:
+    description: Доступ к команде остановки всех источников звука в радиусе (/svcplate stoparound)
+    default: op
+  simplevoicechatplate.command.status:
+    description: Доступ к диагностике потоков, кэша и 3D-акустики (/svcplate status)
+    default: op
+  simplevoicechatplate.command.cache.clear:
+    description: Доступ к полной очистке аудио-кэша (/svcplate cache clear)
+    default: op
+  simplevoicechatplate.command.updatedeps:
+    description: Доступ к принудительному обновлению модуля yt-dlp (/svcplate updatedeps)
+    default: op
+  simplevoicechatplate.command.reload:
+    description: Доступ к перезагрузке конфигурации и языковых файлов (/svcplate reload)
+    default: op
+
+  simplevoicechatplate.anvil.burn:
+    description: Разрешает записывать ссылки на пластинки и рога через наковальню
+    default: true
+  simplevoicechatplate.anvil.erase:
+    description: Разрешает стирать записанные пластинки и рога ножницами в наковальне
+    default: true
+  simplevoicechatplate.burn.bypass:
+    description: Позволяет записывать музыку на любые пластинки в обход требования метки чистой пластинки
+    default: op
+  simplevoicechatplate.play.jukebox:
+    description: Разрешает вставлять кастомные пластинки в проигрыватель и открывать меню плеера
+    default: true
+  simplevoicechatplate.play.horn:
+    description: Разрешает воспроизводить кастомные звуковые козьи рога
+    default: true
+  simplevoicechatplate.play.portable:
+    description: Разрешает использовать портативный плеер с руки
+    default: true
